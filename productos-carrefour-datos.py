@@ -26,6 +26,11 @@ def scrape_product_details(url, retries=3):
         options.add_argument("--disable-dev-shm-usage")
         options.add_argument(f"user-agent={random.choice(user_agents)}")  # Random user agent for each attempt
 
+        options.add_argument("--window-size=1920x1080")  # Set a larger window size
+        options.add_argument("--start-maximized")  # Start maximized
+        options.add_argument("--ignore-certificate-errors")  # Ignore SSL certificate errors
+        options.add_argument("--incognito")  # Open in incognito mode
+        
         driver = webdriver.Chrome(service=ChromeService(ChromeDriverManager().install()), options=options)
         
         try:
@@ -82,7 +87,7 @@ def main():
     product_details = []
 
     # Limit to the first 5 products
-    urls_to_scrape = df_products['url'][:100]  # Change to [:5] to scrape the first 5 products
+    urls_to_scrape = df_products['url'][:50]  # Change to [:5] to scrape the first 5 products
 
     # Use ThreadPoolExecutor for multithreading
     max_workers = 20  # Use 20 threads to utilize your CPU effectively
