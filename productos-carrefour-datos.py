@@ -24,12 +24,14 @@ def scrape_product_details(url, retries=3):
         options.add_argument("--headless")  # Run in headless mode
         options.add_argument("--no-sandbox")
         options.add_argument("--disable-dev-shm-usage")
+        options.add_argument("--disable-gpu")
         options.add_argument(f"user-agent={random.choice(user_agents)}")  # Random user agent for each attempt
 
         options.add_argument("--window-size=1920x1080")  # Set a larger window size
         options.add_argument("--start-maximized")  # Start maximized
         options.add_argument("--ignore-certificate-errors")  # Ignore SSL certificate errors
-        options.add_argument("--incognito")  # Open in incognito mode
+        options.add_argument("--incognito")  # Open in incognito mod
+        options.add_argument("--remote-debugging-pipe")
         
         driver = webdriver.Chrome(service=ChromeService(ChromeDriverManager().install()), options=options)
         
@@ -49,7 +51,10 @@ def scrape_product_details(url, retries=3):
             except:
                 price_if_discounted = None
             
-            name = driver.find_element(By.XPATH, '/html/body/div[2]/div/main/div[1]/div[1]/h1').text.strip()
+            try:
+                name = driver.find_element(By.XPATH, '/html/body/div[2]/div/main/div[1]/div[1]/h1').text.strip()
+            except:
+                return None #Si no tiene nombre es porque es inaccesible
             category = driver.find_element(By.XPATH, '/html/body/div[2]/div/main/nav/div/div/ol/li[3]/a').text.strip()
             subcategory = driver.find_element(By.XPATH, '/html/body/div[2]/div/main/nav/div/div/ol/li[4]/a').text.strip()
             
@@ -87,7 +92,7 @@ def main():
     product_details = []
 
     # Limit to the first 5 products
-    urls_to_scrape = df_products['url'][:50]  # Change to [:5] to scrape the first 5 products
+    urls_to_scrape = df_products['url'][:100]  # Change to [:5] to scrape the first 5 products
 
     # Use ThreadPoolExecutor for multithreading
     max_workers = 20  # Use 20 threads to utilize your CPU effectively
