@@ -2,17 +2,23 @@ import logging
 import random
 import time
 import csv
+
+from datetime import datetime
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service as ChromeService
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
 from webdriver_manager.chrome import ChromeDriverManager
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import xml_carrefour as xml_c
 
+timestamp = datetime.now()
+dt_string = timestamp.strftime("%d_%m_%Y_%H_%M_%S")
 # Configuración del logger para errores de Python y Selenium
 logging.basicConfig(
-    filename='scraper_errors.log',
+    filename='log/' + dt_string + 'scraper_errors.log',
     level=logging.ERROR,
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
@@ -25,86 +31,79 @@ xml_c.csv_productos()
 
 
 # Scrapea productos y sus datos
-def scrape_product_details(url, retries=3):
+def scrape_product_details(url, retries=3, timeout=10):
     for attempt in range(retries):
         options = Options()
         options.add_argument("--no-sandbox")
         options.add_argument("--disable-dev-shm-usage")
         options.add_argument("--disable-gpu")
         options.add_argument(f"user-agent={random.choice(user_agents)}")
+        #Headless no funciona bien asi que se añaden estos tres argumentos, ver actual 129 de chromedriver, si se actualiza verificar si funciona
         options.add_argument("--window-position=-2400,-2400")
         options.add_argument("--start-minimized")
         options.add_argument("--headless=new")
+        
         options.add_argument("--disable-extensions")
         options.add_argument("--ignore-certificate-errors")
         options.add_experimental_option('excludeSwitches', ['enable-logging'])
 
-        # Redirigir el log de Chrome a un archivo
         service = ChromeService(ChromeDriverManager().install())
-        service.log_path = "chrome_errors.log"  # Archivo donde se guardarán los logs de Chrome
+        service.log_path = 'log/' + dt_string + "chrome_errors.log"
         
         driver = webdriver.Chrome(service=service, options=options)
         
         try:
             driver.get(url)
-            # Diferente tipos de precios segun layout
-            try:
-                price = driver.find_element(By.XPATH, '/html/body/div[2]/div/main/div[2]/div[1]/div/div/div/div[1]/span').text.strip()
-                if price == 'BAJADA DE PRECIOS':
-                    price = driver.find_element(By.XPATH, '/html/body/div[2]/div/main/div[2]/div[1]/div/div/div[2]/div[1]/span').text.strip()
-                elif len(price) == 0:
-                    price = driver.find_element(By.XPATH, '/html/body/div[2]/div/main/div[2]/div[2]/div/div/div[1]/div[1]/span')
-            except:
-                price = None
+            
+            # Diccionario de elementos con sus nombres y XPATHs posibles (hay algunos elementos que puede que no funcionen idk)
+            elements_to_scrape = {
+                'price': ['/html/body/div[2]/div/main/div[2]/div[1]/div/div/div/div[1]/span',
+                          '/html/body/div[2]/div/main/div[2]/div[1]/div/div/div[2]/div[1]/span',
+                          '/html/body/div[2]/div/main/div[2]/div[2]/div/div/div[1]/div[1]/span'],
+                'price_if_discounted': ['/html/body/div[2]/div/main/div[2]/div[1]/div/div/div[1]/div[1]/span[2]'],
+                'name': ['/html/body/div[2]/div/main/div[1]/div[1]/h1'],
+                'category': ['/html/body/div[2]/div/main/nav/div/div/ol/li[3]/a'],
+                'subcategory': ['/html/body/div[2]/div/main/nav/div/div/ol/li[4]/a'],
+                'subsubcategory': ['/html/body/div[2]/div/main/nav/div/div/ol/li[5]/a'],
+                'img': ['/html/body/div[2]/div/main/div[1]/div[3]/div/div/div[1]/div/div/div/div/div/div/div/div/div/div/div/div/img[2]',
+                        '/html/body/div[2]/div/main/div[1]/div[2]/div/div/div/div[1]/div/div/div/img[1]']
+            }
 
-            try:
-                price_if_discounted = driver.find_element(By.XPATH, '/html/body/div[2]/div/main/div[2]/div[1]/div/div/div[1]/div[1]/span[2]').text.strip()
-            except:
-                price_if_discounted = None
-                
-            #Si no tiene nombre entonces no existe o no es accesible
-            try:
-                name = driver.find_element(By.XPATH, '/html/body/div[2]/div/main/div[1]/div[1]/h1').text.strip()
-            except:
+            scraped_data = {}
+            for key, xpaths in elements_to_scrape.items():
+                for xpath in xpaths:
+                    try:
+                        # Usar WebDriverWait para limitar el tiempo de espera
+                        element = WebDriverWait(driver, timeout).until(
+                            EC.presence_of_element_located((By.XPATH, xpath))
+                        )
+                        scraped_data[key] = element.text.strip() if key != 'img' else element.get_attribute('src')
+                        break  # Salir del bucle si el elemento fue encontrado
+                    except:
+                        continue  # Intentar el siguiente XPATH si no se encontró el elemento
+            
+            if 'name' not in scraped_data:
                 logging.error(f"No encontrado: {url}")
                 return None
-            
-            try:
-                category = driver.find_element(By.XPATH, '/html/body/div[2]/div/main/nav/div/div/ol/li[3]/a').text.strip()
-            except:
-                category = None
-
-            try:
-                subcategory = driver.find_element(By.XPATH, '/html/body/div[2]/div/main/nav/div/div/ol/li[4]/a').text.strip()
-            except:
-                subcategory = None
-            
-            try:
-                subsubcategory = driver.find_element(By.XPATH, '/html/body/div[2]/div/main/nav/div/div/ol/li[5]/a').text.strip()
-            except:
-                subsubcategory = None
-            
-            try:
-                img = driver.find_element(By.XPATH, '/html/body/div[2]/div/main/div[1]/div[3]/div/div/div[1]/div/div/div/div/div/div/div/div/div/div/div/div/img[2]').get_attribute('src')
-            except:
-                img = driver.find_element(By.XPATH, '/html/body/div[2]/div/main/div[1]/div[2]/div/div/div/div[1]/div/div/div/img[1]').get_attribute('src')
 
             return {
                 'url': url,
-                'nombre': name,
-                'precio': price,
-                'precio_descuento': price_if_discounted,
-                'categoria': category,
-                'subcategoria': subcategory,
-                'subsubcategoria': subsubcategory,
-                'imagen': img
+                'nombre': scraped_data.get('name', None),
+                'precio': scraped_data.get('price', None),
+                'precio_descuento': scraped_data.get('price_if_discounted', None),
+                'categoria': scraped_data.get('category', None),
+                'subcategoria': scraped_data.get('subcategory', None),
+                'subsubcategoria': scraped_data.get('subsubcategory', None),
+                'imagen': scraped_data.get('img', None)
             }
+
         except Exception as e:
             logging.error(f"Attempt {attempt + 1} failed for {url}: {e}")
             time.sleep(2)
         finally:
             driver.quit()
     return None
+
 
 def main():
     with open('output/carrefour-productos.csv', 'r') as csvfile:
