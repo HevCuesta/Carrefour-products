@@ -1,150 +1,128 @@
 import logging
 import random
-import time
 import csv
-import threading
-
+import multiprocessing
 from datetime import datetime
-from selenium import webdriver
-from selenium.webdriver.chrome.service import Service as ChromeService
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from webdriver_manager.chrome import ChromeDriverManager
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from functools import partial
+from playwright.sync_api import sync_playwright
 import xml_carrefour as xml_c
-
-# Creación de un bloqueo para asegurar la escritura sincronizada
-lock = threading.Lock()
-
-timestamp = datetime.now()
-dt_string = timestamp.strftime("%d_%m_%Y_%H_%M_%S")
-# Configuración del logger para errores de Python y Selenium
-logging.basicConfig(
-    filename='log/' + dt_string + 'scraper.log',
-    level=logging.WARN,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
 
 # User agents
 user_agents = xml_c.user_agents
 
-# Pre-instalar el driver una sola vez
-driver_path = ChromeDriverManager().install()
+def scrape_product_details(url):
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            context = browser.new_context(
+                user_agent=random.choice(user_agents),
+                ignore_https_errors=True
+            )
+            page = context.new_page()
 
-# Scrapea productos y sus datos
-def scrape_product_details(url, retries=1, timeout=5):
-    for attempt in range(retries):
-        options = Options()
-        options.add_argument("--no-sandbox")
-        options.add_argument("--disable-dev-shm-usage")
-        options.add_argument("--disable-gpu")
-        options.add_argument(f"user-agent={random.choice(user_agents)}")
-        #Headless no funciona bien asi que se añaden estos tres argumentos, ver actual 129 de chromedriver, si se actualiza verificar si funciona
-        options.add_argument("--window-position=-2400,-2400")
-        options.add_argument("--start-minimized")
-        options.add_argument("--headless=new")
-        
-        options.add_argument("--disable-extensions")
-        options.add_argument("--ignore-certificate-errors")
-        options.add_experimental_option('excludeSwitches', ['enable-logging'])
+            # Aumentar el timeout general
+            page.set_default_timeout(10000)
 
-        # Usar el driver_path preinstalado
-        service = ChromeService(executable_path=driver_path)
-        service.log_path = 'log/' + dt_string + "chrome_errors.log"
-        
-        driver = webdriver.Chrome(service=service, options=options)
-        
-        try:
-            driver.get(url)
-            
-            # Diccionario de elementos con sus nombres y XPATHs posibles (hay algunos elementos que puede que no funcionen idk)
+            page.goto(url)
             elements_to_scrape = {
-                'price': ['/html/body/div[2]/div/main/div[2]/div[1]/div/div/div/div[1]/span',
-                          '/html/body/div[2]/div/main/div[2]/div[1]/div/div/div[2]/div[1]/span',
-                          '/html/body/div[2]/div/main/div[2]/div[2]/div/div/div[1]/div[1]/span'],
-                'price_if_discounted': ['/html/body/div[2]/div/main/div[2]/div[1]/div/div/div[1]/div[1]/span[2]'],
+                'price': [
+                    '/html/body/div[2]/div/main/div[2]/div[1]/div/div/div/div[1]/span',
+                    '/html/body/div[2]/div/main/div[2]/div[1]/div/div/div[2]/div[1]/span',
+                    '/html/body/div[2]/div/main/div[2]/div[2]/div/div/div[1]/div[1]/span'
+                ],
+                'price_if_discounted': [
+                    '/html/body/div[2]/div/main/div[2]/div[1]/div/div/div[1]/div[1]/span[2]'
+                ],
                 'name': ['/html/body/div[2]/div/main/div[1]/div[1]/h1'],
                 'category': ['/html/body/div[2]/div/main/nav/div/div/ol/li[3]/a'],
                 'subcategory': ['/html/body/div[2]/div/main/nav/div/div/ol/li[4]/a'],
                 'subsubcategoria': ['/html/body/div[2]/div/main/nav/div/div/ol/li[5]/a'],
-                'img': ['/html/body/div[2]/div/main/div[1]/div[3]/div/div/div[1]/div/div/div/div/div/div/div/div/div/div/div/div/img[2]',
-                        '/html/body/div[2]/div/main/div[1]/div[2]/div/div/div/div[1]/div/div/div/img[1]']
+                'img': [
+                    '/html/body/div[2]/div/main/div[1]/div[3]/div/div/div[1]/div/div/div/div/div/div/div/div/div/div/div/div/img[2]',
+                    '/html/body/div[2]/div/main/div[1]/div[2]/div/div/div/div[1]/div/div/div/img[1]'
+                ],
+                'precio_por': [
+                    '/html/body/div[2]/div/main/div[2]/div[1]/div/div/div/div[1]/div/span',
+                    '/html/body/div[2]/div/main/div[2]/div[1]/div/div/div[1]/div[1]/div/span[1]'
+                ],
+                'precio_por_descuento': [
+                    '/html/body/div[2]/div/main/div[2]/div[1]/div/div/div[1]/div[1]/div/span[2]'
+                ]
             }
 
             scraped_data = {}
             for key, xpaths in elements_to_scrape.items():
                 for xpath in xpaths:
                     try:
-                        # Usar WebDriverWait para limitar el tiempo de espera
-                        element = WebDriverWait(driver, timeout).until(
-                            EC.presence_of_element_located((By.XPATH, xpath))
-                        )
+                        element = page.wait_for_selector(f"xpath={xpath}", timeout=5000)
                         if key != 'img':
-                            text = element.text.strip()
+                            text = element.text_content().strip()
                             if key == 'price' and text == 'BAJADA DE PRECIOS':
-                                continue  # Intentar el siguiente XPATH si el texto es "BAJADA DE PRECIOS"
+                                continue
                             scraped_data[key] = text
                         else:
-                            scraped_data[key] = element.get_attribute('src')
-                        break  # Salir del bucle si el elemento fue encontrado
+                            src = element.get_attribute('src')
+                            scraped_data[key] = src
+                        break
                     except:
-                        continue  # Intentar el siguiente XPATH si no se encontró el elemento
-            
+                        continue
+
+            browser.close()
+
             if 'name' not in scraped_data:
                 logging.error(f"No encontrado: {url}")
                 return None
 
-            return {
+            result = {
                 'url': url,
-                'nombre': scraped_data.get('name', None),
-                'precio': scraped_data.get('price', None),
-                'precio_descuento': scraped_data.get('price_if_discounted', None),
-                'categoria': scraped_data.get('category', None),
-                'subcategoria': scraped_data.get('subcategory', None),
-                'subsubcategoria': scraped_data.get('subsubcategoria', None),
-                'imagen': scraped_data.get('img', None)
+                'nombre': scraped_data.get('name'),
+                'precio': scraped_data.get('price'),
+                'precio_descuento': scraped_data.get('price_if_discounted'),
+                'categoria': scraped_data.get('category'),
+                'subcategoria': scraped_data.get('subcategory'),
+                'subsubcategoria': scraped_data.get('subsubcategoria'),
+                'imagen': scraped_data.get('img'),
+                'precio_por': scraped_data.get('precio_por'),
+                'precio_por_descuento': scraped_data.get('precio_por_descuento')
             }
+            print(f"Scrapeado con éxito: {url}")
+            return result
 
-        except Exception as e:
-            logging.error(f"Attempt {attempt + 1} failed for {url}: {e}")
-            time.sleep(1)
-        finally:
-            driver.quit()
-    return None
+    except Exception as e:
+        logging.error(f"Error procesando {url}: {e}")
+        return None
 
 def main():
+    # Configuración del logger para errores
+    timestamp = datetime.now()
+    dt_string = timestamp.strftime("%d_%m_%Y_%H_%M_%S")
+    logging.basicConfig(
+        filename=f'log/{dt_string}_scraper.log',
+        level=logging.WARNING,
+        format='%(asctime)s - %(levelname)s - %(message)s'
+    )
+
     logging.warning('Scrapeo iniciado.')
-    
-    # Lectura de las URLs a scrapear
-    with open('output/carrefour-productos.csv', 'r') as csvfile:
+
+    # Leer URLs a scrapear
+    with open('output/carrefour-productos.csv', 'r', encoding='utf-8') as csvfile:
         urls_to_scrape = [row['url'] for row in csv.DictReader(csvfile)]
+
+    # Número de procesos
+    num_processes = 16  # Ajusta este número según tu sistema
 
     # Apertura del archivo de salida
     with open('output/carrefour-product-details.csv', 'w', newline='', encoding='utf-8') as csvfile:
-        fieldnames = ['url', 'nombre', 'precio', 'precio_descuento', 'categoria', 'subcategoria', 'subsubcategoria', 'imagen']
+        fieldnames = ['url', 'nombre', 'precio', 'precio_descuento', 'precio_por', 'precio_por_descuento',
+                      'categoria', 'subcategoria', 'subsubcategoria', 'imagen']
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
         writer.writeheader()
 
-        max_workers = 16  # Ajuste de hilos para estabilidad
-        
-        # Uso de ThreadPoolExecutor para manejo de concurrencia
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            future_to_url = {executor.submit(scrape_product_details, url): url for url in urls_to_scrape[:100]}  # Modificar el límite de URLs aquí si es necesario
-
-            for future in as_completed(future_to_url):
-                url = future_to_url[future]
-                try:
-                    result = future.result()
-                    if result:
-                        # Asegurar que solo un hilo escriba al CSV a la vez
-                        with lock:
-                            writer.writerow(result)
-                            csvfile.flush()  # Asegura que se guarde después de cada escritura
-                        print(f"Scrapeado con éxito: {url}")
-                except Exception as e:
-                    logging.error(f"No scrapeado {url}: {e}")
+        # Usar Pool de multiprocessing
+        with multiprocessing.Pool(processes=num_processes) as pool:
+            for result in pool.imap_unordered(scrape_product_details, urls_to_scrape):
+                if result:
+                    writer.writerow(result)
 
     logging.warning('Scrapeo terminado.')
     print('Scrapeo terminado.')
