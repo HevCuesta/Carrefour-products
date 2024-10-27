@@ -1,8 +1,8 @@
 import random
-import pandas as pd
 from io import StringIO
 from lxml import etree
 from playwright.sync_api import sync_playwright
+import csv
 
 # Agentes de usuario
 user_agents = [
@@ -13,67 +13,42 @@ user_agents = [
     "Mozilla/5.0 (Linux; Android 10; SM-G950F) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/100.0.4896.127 Mobile Safari/537.36"
 ]
 
-# Función para extraer contenido XML de una URL
-def scrape_xml(url):
-    with sync_playwright() as p:
-        browser = p.chromium.launch(
-            headless=True,
-            args=[
-                "--no-sandbox",
-                "--disable-dev-shm-usage",
-                "--disable-gpu",
-                "--window-position=-2400,-2400",
-                "--start-minimized",
-                "--disable-extensions",
-                "--ignore-certificate-errors"
-            ]
-        )
-        user_agent = random.choice(user_agents)
-        context = browser.new_context(
-            user_agent=user_agent,
-            ignore_https_errors=True
-        )
-        page = context.new_page()
-        page.goto(url, wait_until='networkidle')
-        xml_content = page.content()
-        browser.close()
-    return xml_content
+# Función para extraer y parsear XML desde una URL
+def fetch_xml_content(url, context):
+    page = context.new_page()
+    page.goto(url, wait_until='networkidle')
+    content = page.content()
+    page.close()
+    return content
 
-# Función principal para obtener los productos
-def csv_productos():
+# Función principal para extraer URLs de productos y fechas, y actualizar CSV
+def actualizar_csv_productos():
     urls = [
         "https://www.carrefour.es/sitemap/food/products/detail0_food-00000-of-00002.xml",
         "https://www.carrefour.es/sitemap/food/products/detail0_food-00001-of-00002.xml"
     ]
 
-    # Almacenamiento de datos
-    all_urls = []
-    all_lastmod_dates = []
+    # Configuración del navegador
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
+        context = browser.new_context(user_agent=random.choice(user_agents), ignore_https_errors=True)
 
-    # Extraer y parsear el XML de cada URL
-    for url in urls:
-        print("Leyendo listado de productos....")
-        xml_content = scrape_xml(url)
-        
-        # Envolver el contenido XML en StringIO para parsearlo
-        xml_buffer = StringIO(xml_content)
-        
-        # Parsear el XML usando lxml
-        tree = etree.parse(xml_buffer)
-        
-        # Extraer 'loc' y 'lastmod' del XML usando el namespace correcto
-        urls_extracted = tree.xpath('//ns:url/ns:loc/text()', namespaces={'ns': 'http://www.sitemaps.org/schemas/sitemap/0.9'})
-        lastmod_dates_extracted = tree.xpath('//ns:url/ns:lastmod/text()', namespaces={'ns': 'http://www.sitemaps.org/schemas/sitemap/0.9'})
-        
-        # Añadir los datos extraídos a las listas
-        all_urls.extend(urls_extracted)
-        all_lastmod_dates.extend(lastmod_dates_extracted)
+        # Extraer datos y guardarlos en el archivo CSV
+        with open('output/carrefour-productos.csv', mode='w', newline='', encoding='utf-8') as csvfile:
+            writer = csv.writer(csvfile)
+            writer.writerow(['url', 'lastmod'])  # Encabezados del CSV
 
-    # Crear un DataFrame con los datos combinados
-    df = pd.DataFrame({
-        'url': all_urls,
-        'lastmod': all_lastmod_dates
-    })
+            for url in urls:
+                print(f"Extrayendo datos de: {url}")
+                xml_content = fetch_xml_content(url, context)
 
-    # Guardar el DataFrame en un archivo CSV
-    df.to_csv('output/carrefour-productos.csv', index=False)
+                # Parsear el XML
+                tree = etree.parse(StringIO(xml_content))
+                ns = {'ns': 'http://www.sitemaps.org/schemas/sitemap/0.9'}
+                urls_extracted = tree.xpath('//ns:url/ns:loc/text()', namespaces=ns)
+                lastmod_dates_extracted = tree.xpath('//ns:url/ns:lastmod/text()', namespaces=ns)
+
+                # Escribir las filas en el CSV
+                writer.writerows(zip(urls_extracted, lastmod_dates_extracted))
+
+        browser.close()

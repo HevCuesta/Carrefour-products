@@ -1,29 +1,28 @@
 import logging
 import random
 import csv
-import multiprocessing
+import re
 from datetime import datetime
-from functools import partial
-from playwright.sync_api import sync_playwright
+from playwright.async_api import async_playwright
+import asyncio
 import xml_carrefour as xml_c
 
 # User agents
 user_agents = xml_c.user_agents
 
-def scrape_product_details(url):
-    try:
-        with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
-            context = browser.new_context(
-                user_agent=random.choice(user_agents),
-                ignore_https_errors=True
-            )
-            page = context.new_page()
+async def scrape_product_details(sem, url, browser):
+    async with sem:
+        context = await browser.new_context(
+            user_agent=random.choice(user_agents),
+            ignore_https_errors=True
+        )
+        page = await context.new_page()
 
-            # Aumentar el timeout general
-            page.set_default_timeout(10000)
+        # Increase the general timeout
+        page.set_default_timeout(10000)
 
-            page.goto(url)
+        try:
+            await page.goto(url)
             elements_to_scrape = {
                 'price': [
                     '/html/body/div[2]/div/main/div[2]/div[1]/div/div/div/div[1]/span',
@@ -54,20 +53,21 @@ def scrape_product_details(url):
             for key, xpaths in elements_to_scrape.items():
                 for xpath in xpaths:
                     try:
-                        element = page.wait_for_selector(f"xpath={xpath}", timeout=5000)
+                        element = await page.wait_for_selector(f"xpath={xpath}", timeout=5000)
                         if key != 'img':
-                            text = element.text_content().strip()
+                            # Obtener el contenido completo del elemento y luego limpiar el formato
+                            text = (await element.inner_text()).strip()
+                            # Limpia los saltos de línea y agrega un espacio uniforme alrededor del guion
+                            text = re.sub(r'\s*-\s*', ' - ', re.sub(r'\s+', ' ', text))
                             if key == 'price' and text == 'BAJADA DE PRECIOS':
                                 continue
                             scraped_data[key] = text
                         else:
-                            src = element.get_attribute('src')
+                            src = await element.get_attribute('src')
                             scraped_data[key] = src
                         break
-                    except:
+                    except Exception:
                         continue
-
-            browser.close()
 
             if 'name' not in scraped_data:
                 logging.error(f"No encontrado: {url}")
@@ -78,22 +78,24 @@ def scrape_product_details(url):
                 'nombre': scraped_data.get('name'),
                 'precio': scraped_data.get('price'),
                 'precio_descuento': scraped_data.get('price_if_discounted'),
+                'precio_por': scraped_data.get('precio_por'),
+                'precio_por_descuento': scraped_data.get('precio_por_descuento'),
                 'categoria': scraped_data.get('category'),
                 'subcategoria': scraped_data.get('subcategory'),
                 'subsubcategoria': scraped_data.get('subsubcategoria'),
-                'imagen': scraped_data.get('img'),
-                'precio_por': scraped_data.get('precio_por'),
-                'precio_por_descuento': scraped_data.get('precio_por_descuento')
+                'imagen': scraped_data.get('img')
             }
             print(f"Scrapeado con éxito: {url}")
             return result
 
-    except Exception as e:
-        logging.error(f"Error procesando {url}: {e}")
-        return None
+        except Exception as e:
+            logging.error(f"Error procesando {url}: {e}")
+            return None
+        finally:
+            await context.close()
 
-def main():
-    # Configuración del logger para errores
+async def main():
+    # Logger configuration for errors
     timestamp = datetime.now()
     dt_string = timestamp.strftime("%d_%m_%Y_%H_%M_%S")
     logging.basicConfig(
@@ -104,30 +106,42 @@ def main():
 
     logging.warning('Scrapeo iniciado.')
 
-    # Leer URLs a scrapear
+    # Read URLs to scrape
     with open('output/carrefour-productos.csv', 'r', encoding='utf-8') as csvfile:
         urls_to_scrape = [row['url'] for row in csv.DictReader(csvfile)]
 
-    # Número de procesos
-    num_processes = 16  # Ajusta este número según tu sistema
+    # Limit the number of concurrent tasks
+    max_concurrent_tasks = 10  # Adjust this number based on your system capabilities
+    sem = asyncio.Semaphore(max_concurrent_tasks)
 
-    # Apertura del archivo de salida
+    # Open the output file
+    fieldnames = ['url', 'nombre', 'precio', 'precio_descuento', 'precio_por', 'precio_por_descuento',
+                  'categoria', 'subcategoria', 'subsubcategoria', 'imagen']
     with open('output/carrefour-product-details.csv', 'w', newline='', encoding='utf-8') as csvfile:
-        fieldnames = ['url', 'nombre', 'precio', 'precio_descuento', 'precio_por', 'precio_por_descuento',
-                      'categoria', 'subcategoria', 'subsubcategoria', 'imagen']
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
         writer.writeheader()
 
-        # Usar Pool de multiprocessing
-        with multiprocessing.Pool(processes=num_processes) as pool:
-            for result in pool.imap_unordered(scrape_product_details, urls_to_scrape):
+        async with async_playwright() as playwright:
+            # Launch the browser once
+            browser = await playwright.chromium.launch(headless=True)
+
+            tasks = []
+            for url in urls_to_scrape:
+                tasks.append(scrape_product_details(sem, url, browser))
+
+            # Process results as they become available
+            for future in asyncio.as_completed(tasks):
+                result = await future
                 if result:
                     writer.writerow(result)
+
+            # Close the browser after all tasks are done
+            await browser.close()
 
     logging.warning('Scrapeo terminado.')
     print('Scrapeo terminado.')
 
 if __name__ == "__main__":
-    # Invoca csv de listado de productos para actualizar el .csv que tiene los productos
-    xml_c.csv_productos()
-    main()
+    #Invoca para obtener las urls de productos actualziadas
+    xml_c.actualizar_csv_productos()
+    asyncio.run(main())
