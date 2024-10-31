@@ -1,8 +1,11 @@
-## Carrefour scraper
+# Carrefour scraper
 Scraper para carrefour españa con Playwright, absurdamente lento.
 
-# Uso:
+## Uso:
 
-Playwright tiene instalción especial:
-```pip install playwright```
-```playwright install```
+Playwright tiene instalación especial:
+```
+pip install playwright
+playwright install
+```
+Luego simplemente ejecutar el ```main.py``` 
