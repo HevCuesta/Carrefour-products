@@ -1,43 +1,91 @@
 from curl_cffi import requests
-from io import BytesIO
-from lxml import etree
-import csv
+from datetime import datetime
+import logging
 import os
+import time
+import csv
 
-url = 'https://www.carrefour.es/sitemap/food/categories/categorySitemap-00000-of-00001.xml'
 
-response = requests.get(url, impersonate="chrome")
+base_url = 'https://www.carrefour.es/cloud-api/plp-food-papi/v1'
 
-if response.status_code != 200:
-    print(f"Error al obtener la URL: {response.status_code}")
-    exit()
+def main():
+    # Configuración del logger
+    timestamp = datetime.now()
+    dt_string = timestamp.strftime("%d_%m_%Y_%H_%M_%S")
+    try:
+        logging.basicConfig(
+            filename=f'log/{dt_string}_scraper.log',
+            level=logging.WARNING,
+            format='%(asctime)s - %(levelname)s - %(message)s'
+        )
+    except FileNotFoundError:
+        os.makedirs('log')
+        logging.basicConfig(
+            filename=f'log/{dt_string}_scraper.log',
+            level=logging.WARNING,
+            format='%(asctime)s - %(levelname)s - %(message)s'
+        )
 
-def guardarCSV():
-    # Asegurar que el directorio 'output' existe
-    if not os.path.exists('output'):
-        os.makedirs('output')
+    logging.warning('Scrapeo iniciado.')
 
-    # Extraer datos y guardarlos en el archivo CSV
-    with open('output/carrefour-categories.csv', mode='w', newline='', encoding='utf-8') as csvfile:
-        writer = csv.writer(csvfile)
-        writer.writerow(['url', 'lastmod'])  # Encabezados del CSV
-        print(f"Extrayendo datos de: {url}")
+    # Leer URLs del archivo CSV y quitar el prefijo si está presente
+    with open('output/carrefour-categories.csv', 'r', encoding='utf-8') as csvfile:
+        urls_to_scrape = [
+            row['url'].replace('https://www.carrefour.es', '') for row in csv.DictReader(csvfile)
+        ]
+    
+    if not urls_to_scrape:
+        logging.warning("No se encontraron URLs para scrapear.")
+        print("No se encontraron URLs para scrapear.")
+        return
 
-        try:
-            # Parsear el XML
-            tree = etree.parse(BytesIO(response.content))
-            ns = {'ns': 'http://www.sitemaps.org/schemas/sitemap/0.9'}
-            urls_extracted = tree.xpath('//ns:url/ns:loc/text()', namespaces=ns)
-            lastmod_dates_extracted = tree.xpath('//ns:url/ns:lastmod/text()', namespaces=ns)
+    fieldnames = ['id', 'url', 'nombre', 'precio', 'precio_por', 'marca', 'categoria', 'imagen']
+    with open('output/carrefour-product-details.csv', 'w', newline='', encoding='utf-8') as csvfile:
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        writer.writeheader()
 
-            # Filtrar y escribir solo las URLs que son subcategorías
-            for url, lastmod in zip(urls_extracted, lastmod_dates_extracted):
-                # Contar el número de segmentos en la URL
-                segments = url.split('/')
-                if len(segments) == 7:  # Solo guarda si tiene exactamente 7 segmentos (indicativo de una subcategoría)
-                    writer.writerow([url, lastmod])
+        for url in urls_to_scrape:
+            print(f"Scrapeando URL: {url}")
+            scrape_product_details(url, writer)
 
-        except etree.XMLSyntaxError as e:
-            print(f"Error al parsear el XML: {e}")
+    logging.warning('Scrapeo terminado.')
+    print('Scrapeo terminado.')
 
-guardarCSV()
+def scrape_product_details(url, writer):
+    offset = 0
+    while True:
+        full_url = f"{base_url}{url}?offset={offset}"
+        print(f"Accediendo a: {full_url}")
+        
+        response = requests.get(full_url, impersonate="safari")
+        if response.status_code != 200:
+            logging.warning(f"Error al acceder a {full_url}: {response.status_code}")
+            print(f"Error al acceder a {full_url}: {response.status_code}")
+            break
+
+        data = response.json()
+        items = data.get('results', {}).get('items', [])
+        
+        if not items:
+            print("No se encontraron productos en esta página.")
+            break  # Salir si no hay más productos
+
+        for item in items:
+            product_data = {
+                'id': item.get('product_id', ''),
+                'url': 'https://www.carrefour.es' + item.get('url', ''),
+                'nombre': item.get('name', ''),
+                'precio': item.get('price', ''),
+                'precio_por': item.get('price_per_unit', '') + '/' + item.get('measure_unit', ''),
+                'marca': item.get('brand', {}).get('name', ''),
+                'categoria': item.get('catalog', ''),
+                'imagen': item.get('images', {}).get('desktop', '')
+            }
+            writer.writerow(product_data)
+
+        # Incrementar offset y pausar para evitar sobrecarga
+        offset += 24
+        time.sleep(1)
+
+if __name__ == "__main__":
+    main()
