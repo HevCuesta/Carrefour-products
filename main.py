@@ -1,12 +1,14 @@
 from curl_cffi import requests
 from datetime import datetime
 import xml_carrefour as xml_c
+import pandas as pd
 import logging
 import os
 import time
 import csv
 
 base_url = 'https://www.carrefour.es/cloud-api/plp-food-papi/v1'
+csv_output = 'output/carrefour-product-details.csv'
 
 def main():
     # Configuración del logger
@@ -40,7 +42,7 @@ def main():
         return
 
     fieldnames = ['id', 'url', 'nombre', 'precio', 'precio_por', 'marca', 'categoria', 'imagen']
-    with open('output/carrefour-product-details.csv', 'w', newline='', encoding='utf-8') as csvfile:
+    with open(csv_output, 'w', newline='', encoding='utf-8') as csvfile:
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
         writer.writeheader()
 
@@ -50,6 +52,15 @@ def main():
 
     logging.warning('Scrapeo terminado.')
     print('Scrapeo terminado.')
+
+    clean_duplicates(csv_output)
+
+def clean_duplicates(csv):
+    df = pd.read_csv(csv)
+    print(f"Limpiando duplicados en {csv}, numero de elementos duplicados: {df.duplicated().sum()}")
+    logging.warning(f"Limpiando duplicados en {csv}, numero de elementos duplicados: {df.duplicated().sum()}")
+    df.drop_duplicates(subset='id', inplace=True)
+    df.to_csv(csv, index=False)
 
 def scrape_product_details(url, writer):
     offset = 0
@@ -112,5 +123,6 @@ def scrape_product_details(url, writer):
         time.sleep(0.2)
 
 if __name__ == "__main__":
-    xml_c.guardarCSV()
-    main()
+    # xml_c.guardarCSV()
+    # main()
+    clean_duplicates(csv_output)

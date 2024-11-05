@@ -39,5 +39,4 @@ def guardarCSV():
 
         except etree.XMLSyntaxError as e:
             print(f"Error al parsear el XML: {e}")
-
-guardarCSV()
+            exit()
