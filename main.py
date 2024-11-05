@@ -67,9 +67,14 @@ def scrape_product_details(url, writer):
             print(f"Error al acceder a {full_url}: {response.status_code}")
             break
 
-        data = response.json()
+        try:
+            data = response.json()
+        except ValueError:
+            logging.warning(f"Error al decodificar JSON de la respuesta en {full_url}")
+            print(f"Error al decodificar JSON de la respuesta en {full_url}")
+            break  # Salir si la respuesta no es un JSON válido
+
         items = data.get('results', {}).get('items', [])
-        
         category = data.get('category', {}).get('display_name', '')
 
         for item in items:
@@ -104,7 +109,7 @@ def scrape_product_details(url, writer):
 
         # Incrementar offset y pausar para evitar sobrecarga
         offset += 24
-        time.sleep(1)
+        time.sleep(0.2)
 
 if __name__ == "__main__":
     xml_c.guardarCSV()
