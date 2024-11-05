@@ -1,58 +1,43 @@
-from datetime import datetime
-import logging
-import os
-import time
+from curl_cffi import requests
+from io import BytesIO
+from lxml import etree
 import csv
-import xml_carrefour as xml_c
+import os
 
-base_url = 'https://www.carrefour.es/cloud-api/plp-food-papi/v1'
+url = 'https://www.carrefour.es/sitemap/food/categories/categorySitemap-00000-of-00001.xml'
 
+response = requests.get(url, impersonate="chrome")
 
-def main():
-    # Logger configuration for errors
-    timestamp = datetime.now()
-    dt_string = timestamp.strftime("%d_%m_%Y_%H_%M_%S")
-    try:
-        logging.basicConfig(
-            filename=f'log/{dt_string}_scraper.log',
-            level=logging.WARNING,
-            format='%(asctime)s - %(levelname)s - %(message)s'
-        )
-    except FileNotFoundError:
-        os.makedirs('log')
-        logging.basicConfig(
-            filename=f'log/{dt_string}_scraper.log',
-            level=logging.WARNING,
-            format='%(asctime)s - %(levelname)s - %(message)s'
-        )
+if response.status_code != 200:
+    print(f"Error al obtener la URL: {response.status_code}")
+    exit()
 
-    logging.warning('Scrapeo iniciado.')
+def guardarCSV():
+    # Asegurar que el directorio 'output' existe
+    if not os.path.exists('output'):
+        os.makedirs('output')
 
-    # URLs a scrapear
-    with open('output/carrefour-categories.csv', 'r', encoding='utf-8') as csvfile:
-        urls_to_scrape = [row['url'] for row in csv.DictReader(csvfile)]
+    # Extraer datos y guardarlos en el archivo CSV
+    with open('output/carrefour-categories.csv', mode='w', newline='', encoding='utf-8') as csvfile:
+        writer = csv.writer(csvfile)
+        writer.writerow(['url', 'lastmod'])  # Encabezados del CSV
+        print(f"Extrayendo datos de: {url}")
 
+        try:
+            # Parsear el XML
+            tree = etree.parse(BytesIO(response.content))
+            ns = {'ns': 'http://www.sitemaps.org/schemas/sitemap/0.9'}
+            urls_extracted = tree.xpath('//ns:url/ns:loc/text()', namespaces=ns)
+            lastmod_dates_extracted = tree.xpath('//ns:url/ns:lastmod/text()', namespaces=ns)
 
-    # Open the output file
-    fieldnames = ['url', 'nombre', 'precio', 'precio_descuento', 'precio_por',
-                  'categoria', 'subcategoria', 'subsubcategoria', 'imagen']
-    with open('output/carrefour-product-details.csv', 'w', newline='', encoding='utf-8') as csvfile:
-        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-        writer.writeheader()
+            # Filtrar y escribir solo las URLs que son subcategorías
+            for url, lastmod in zip(urls_extracted, lastmod_dates_extracted):
+                # Contar el número de segmentos en la URL
+                segments = url.split('/')
+                if len(segments) == 7:  # Solo guarda si tiene exactamente 7 segmentos (indicativo de una subcategoría)
+                    writer.writerow([url, lastmod])
 
-        for url in urls_to_scrape:
-            scrape_product_details(url, writer)
+        except etree.XMLSyntaxError as e:
+            print(f"Error al parsear el XML: {e}")
 
-
-    logging.warning('Scrapeo terminado.')
-    print('Scrapeo terminado.')
-
-
-def scrape_product_details(url):
-    # Scrapea los detalles de un producto
-    
-
-if __name__ == "__main__":
-    # Invoca para obtener las urls de productos actualizadas
-    xml_c.actualizar_csv_productos()
-    asyncio.run(main())
+guardarCSV()

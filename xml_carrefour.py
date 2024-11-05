@@ -30,8 +30,12 @@ def guardarCSV():
             urls_extracted = tree.xpath('//ns:url/ns:loc/text()', namespaces=ns)
             lastmod_dates_extracted = tree.xpath('//ns:url/ns:lastmod/text()', namespaces=ns)
 
-            # Escribir las filas en el CSV
-            writer.writerows(zip(urls_extracted, lastmod_dates_extracted))
+            # Filtrar y escribir solo las URLs que son subcategorías
+            for extracted_url, lastmod in zip(urls_extracted, lastmod_dates_extracted):
+                # Contar el número de segmentos en la URL
+                segments = extracted_url.split('/')
+                if len(segments) == 8:  # Solo guarda si tiene exactamente 8 segmentos (indicativo de una subcategoría)
+                    writer.writerow([extracted_url, lastmod])
 
         except etree.XMLSyntaxError as e:
             print(f"Error al parsear el XML: {e}")
