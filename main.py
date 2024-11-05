@@ -57,7 +57,7 @@ def scrape_product_details(url, writer):
         full_url = f"{base_url}{url}?offset={offset}"
         print(f"Accediendo a: {full_url}")
         
-        response = requests.get(full_url, impersonate="safari")
+        response = requests.get(full_url, impersonate="chrome")
         if response.status_code == 206:
             print("No se encontraron más productos en esta página.")
             break  # Salir si ya no hay más productos (código 206)

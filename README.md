@@ -1,5 +1,5 @@
 # Carrefour scraper
-Scraper para carrefour españa con Playwright, absurdamente lento.
+Scraper para carrefour españa, usa curl_cffi.
 
 ## Uso:
 
