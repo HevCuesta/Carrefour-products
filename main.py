@@ -68,20 +68,34 @@ def scrape_product_details(url, writer):
         full_url = f"{base_url}{url}?offset={offset}"
         print(f"Accediendo a: {full_url}")
         
-        response = requests.get(full_url, impersonate="chrome")
-        if response.status_code == 206:
+        response = None
+        retry_count = 0
+        max_retries = 3
+        while retry_count < max_retries:
+            response = requests.get(full_url, impersonate="chrome")
+            if response.status_code != 403 or 502:
+                break  # Salir del bucle de reintento si el código no es 403
+            retry_count += 1
+            logging.error(f"Error 403: Reintentando acceso a {full_url} ({retry_count}/{max_retries})")
+            print(f"Error 403: Reintentando acceso a {full_url} ({retry_count}/{max_retries})")
+            time.sleep(5)  # Espera de 5 segundos antes de cada intento
+
+        if response is None or response.status_code == 403:
+            logging.error(f"Error 403 persistente: Acceso denegado a {full_url} tras {max_retries} intentos")
+            print(f"Error 403 persistente: Acceso denegado a {full_url} tras {max_retries} intentos")
+            break
+        elif response.status_code == 206:
             print("No se encontraron más productos en esta página.")
             break  # Salir si ya no hay más productos (código 206)
-
         elif response.status_code != 200:
-            logging.warning(f"Error al acceder a {full_url}: {response.status_code}")
+            logging.error(f"Error al acceder a {full_url}: {response.status_code}")
             print(f"Error al acceder a {full_url}: {response.status_code}")
             break
-
+        
         try:
             data = response.json()
         except ValueError:
-            logging.warning(f"Error al decodificar JSON de la respuesta en {full_url}")
+            logging.error(f"Error al decodificar JSON de la respuesta en {full_url}")
             print(f"Error al decodificar JSON de la respuesta en {full_url}")
             break  # Salir si la respuesta no es un JSON válido
 
@@ -120,9 +134,9 @@ def scrape_product_details(url, writer):
 
         # Incrementar offset y pausar para evitar sobrecarga
         offset += 24
-        time.sleep(0.2)
+        time.sleep(1)
 
 if __name__ == "__main__":
-    # xml_c.guardarCSV()
-    # main()
+    xml_c.guardarCSV()
+    main()
     clean_duplicates(csv_output)
