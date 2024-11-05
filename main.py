@@ -1,10 +1,10 @@
 from curl_cffi import requests
 from datetime import datetime
+import xml_carrefour as xml_c
 import logging
 import os
 import time
 import csv
-
 
 base_url = 'https://www.carrefour.es/cloud-api/plp-food-papi/v1'
 
@@ -58,7 +58,11 @@ def scrape_product_details(url, writer):
         print(f"Accediendo a: {full_url}")
         
         response = requests.get(full_url, impersonate="safari")
-        if response.status_code != 200:
+        if response.status_code == 206:
+            print("No se encontraron más productos en esta página.")
+            break  # Salir si ya no hay más productos (código 206)
+
+        elif response.status_code != 200:
             logging.warning(f"Error al acceder a {full_url}: {response.status_code}")
             print(f"Error al acceder a {full_url}: {response.status_code}")
             break
@@ -66,19 +70,34 @@ def scrape_product_details(url, writer):
         data = response.json()
         items = data.get('results', {}).get('items', [])
         
-        if not items:
-            print("No se encontraron productos en esta página.")
-            break  # Salir si no hay más productos
+        category = data.get('category', {}).get('display_name', '')
 
         for item in items:
+            name = item.get('name', '')
+            marca = item.get('brand', {}).get('name', '')
+            # Checkea si es marca blanca
+            if 'Carrefour' in name:
+                marca = 'Carrefour'
+
+            # Procesar el precio para convertirlo en float
+            precio_str = item.get('price', '').replace('€', '').replace(',', '.').strip()
+            try:
+                precio = float(precio_str) if precio_str else None
+            except ValueError:
+                precio = None  # En caso de fallo de conversión
+
+            # Procesar el precio_por
+            precio_por_str = item.get('price_per_unit', '').replace(',', '.').strip()
+            precio_por = f"{precio_por_str}/{item.get('measure_unit', '')}" if precio_por_str else None
+
             product_data = {
                 'id': item.get('product_id', ''),
                 'url': 'https://www.carrefour.es' + item.get('url', ''),
-                'nombre': item.get('name', ''),
-                'precio': item.get('price', ''),
-                'precio_por': item.get('price_per_unit', '') + '/' + item.get('measure_unit', ''),
-                'marca': item.get('brand', {}).get('name', ''),
-                'categoria': item.get('catalog', ''),
+                'nombre': name,
+                'precio': precio,
+                'precio_por': precio_por,
+                'marca': marca,
+                'categoria': category,
                 'imagen': item.get('images', {}).get('desktop', '')
             }
             writer.writerow(product_data)
@@ -88,4 +107,5 @@ def scrape_product_details(url, writer):
         time.sleep(1)
 
 if __name__ == "__main__":
+    xml_c.guardarCSV()
     main()

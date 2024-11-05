@@ -34,7 +34,7 @@ def guardarCSV():
             for extracted_url, lastmod in zip(urls_extracted, lastmod_dates_extracted):
                 # Contar el número de segmentos en la URL
                 segments = extracted_url.split('/')
-                if len(segments) == 8:  # Solo guarda si tiene exactamente 8 segmentos (indicativo de una subcategoría)
+                if len(segments) == 9:  # Solo guarda si tiene exactamente 8 segmentos (indicativo de una subsubcategoría)
                     writer.writerow([extracted_url, lastmod])
 
         except etree.XMLSyntaxError as e:
