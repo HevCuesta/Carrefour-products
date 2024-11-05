@@ -1,177 +1,128 @@
-import logging
-import random
-import csv
-import re
+from curl_cffi import requests
 from datetime import datetime
-from playwright.async_api import async_playwright
-import asyncio
 import xml_carrefour as xml_c
-import psutil
+import pandas as pd
+import logging
+import os
 import time
-import threading
-import os  # Added to get the current process ID
+import csv
 
-# User agents
-user_agents = xml_c.user_agents
+base_url = 'https://www.carrefour.es/cloud-api/plp-food-papi/v1'
+csv_output = 'output/carrefour-product-details.csv'
 
-def kill_node_exe_processes_older_than(minutes: int):
-    while True:
-        current_time = time.time()
-        for proc in psutil.process_iter(['pid', 'name', 'cmdline', 'create_time', 'ppid']):
-            if proc.info['name'] == 'node.exe':
-                process_age_seconds = current_time - proc.create_time()
-                # Exclude processes that are children of the current process
-                if proc.info['ppid'] != os.getpid() and process_age_seconds > (minutes * 60):
-                    # Optionally, refine further by checking cmdline arguments
-                    cmdline = ' '.join(proc.info['cmdline'])
-                    if 'playwright' not in cmdline.lower():
-                        logging.warning(
-                            f"Matando proceso {proc.pid} (edad: {process_age_seconds/60:.2f} minutos, cmdline: {cmdline})"
-                        )
-                        try:
-                            proc.kill()
-                        except Exception as e:
-                            logging.error(f"No se ha podido matar el proceso {proc.pid}: {e}")
-        time.sleep(5)
-
-async def scrape_product_details(sem, url, browser):
-    async with sem:
-        try:
-            # Await the coroutine to get the context
-            context = await browser.new_context(
-                user_agent=random.choice(user_agents),
-                ignore_https_errors=True
-            )
-            async with context:
-                # Await the coroutine to get the page
-                page = await context.new_page()
-                async with page:
-                    # Increase the general timeout
-                    page.set_default_timeout(10000)
-                    await page.goto(url)
-
-                    elements_to_scrape = {
-                        'price': [
-                            '/html/body/div[2]/div/main/div[2]/div[1]/div/div/div/div[1]/span',
-                            '/html/body/div[2]/div/main/div[2]/div[1]/div/div/div[2]/div[1]/span',
-                            '/html/body/div[2]/div/main/div[2]/div[2]/div/div/div[1]/div[1]/span'
-                        ],
-                        'price_if_discounted': [
-                            '/html/body/div[2]/div/main/div[2]/div[1]/div/div/div[1]/div[1]/span[2]'
-                        ],
-                        'name': ['/html/body/div[2]/div/main/div[1]/div[1]/h1'],
-                        'category': ['/html/body/div[2]/div/main/nav/div/div/ol/li[3]/a'],
-                        'subcategory': ['/html/body/div[2]/div/main/nav/div/div/ol/li[4]/a'],
-                        'subsubcategoria': ['/html/body/div[2]/div/main/nav/div/div/ol/li[5]/a'],
-                        'img': [
-                            '/html/body/div[2]/div/main/div[1]/div[3]/div/div/div[1]/div/div/div/div/div/div/div/div/div/div/div/div/img[2]',
-                            '/html/body/div[2]/div/main/div[1]/div[2]/div/div/div/div[1]/div/div/div/img[1]'
-                        ],
-                        'precio_por': [
-                            '/html/body/div[2]/div/main/div[2]/div[1]/div/div/div/div[1]/div/span',
-                            '/html/body/div[2]/div/main/div[2]/div[1]/div/div/div[1]/div[1]/div/span[1]'
-                        ],
-                        'precio_por_descuento': [
-                            '/html/body/div[2]/div/main/div[2]/div[1]/div/div/div[1]/div[1]/div/span[2]'
-                        ]
-                    }
-
-                    scraped_data = {}
-                    for key, xpaths in elements_to_scrape.items():
-                        for xpath in xpaths:
-                            try:
-                                element = await page.wait_for_selector(f"xpath={xpath}", timeout=5000)
-                                if key != 'img':
-                                    # Get the full content of the element and clean the format
-                                    text = (await element.inner_text()).strip()
-                                    # Clean up line breaks and add uniform spacing around hyphens
-                                    text = re.sub(r'\s*-\s*', ' - ', re.sub(r'\s+', ' ', text))
-                                    if key == 'price' and text == 'BAJADA DE PRECIOS':
-                                        continue
-                                    scraped_data[key] = text
-                                else:
-                                    src = await element.get_attribute('src')
-                                    scraped_data[key] = src
-                                break
-                            except Exception:
-                                continue
-
-                    if 'name' not in scraped_data:
-                        logging.error(f"No encontrado: {url}")
-                        return None
-
-                    result = {
-                        'url': url,
-                        'nombre': scraped_data.get('name'),
-                        'precio': scraped_data.get('price'),
-                        'precio_descuento': scraped_data.get('price_if_discounted'),
-                        'precio_por': scraped_data.get('precio_por'),
-                        'precio_por_descuento': scraped_data.get('precio_por_descuento'),
-                        'categoria': scraped_data.get('category'),
-                        'subcategoria': scraped_data.get('subcategory'),
-                        'subsubcategoria': scraped_data.get('subsubcategoria'),
-                        'imagen': scraped_data.get('img')
-                    }
-                    print(f"Scrapeado con éxito: {url}")
-                    return result
-
-        except Exception as e:
-            logging.error(f"Error procesando {url}: {e}", exc_info=True)
-            return None
-
-
-async def main():
-    # Logger configuration for errors
+def main():
+    # Configuración del logger
     timestamp = datetime.now()
     dt_string = timestamp.strftime("%d_%m_%Y_%H_%M_%S")
-    logging.basicConfig(
-        filename=f'log/{dt_string}_scraper.log',
-        level=logging.WARNING,
-        format='%(asctime)s - %(levelname)s - %(message)s'
-    )
+    try:
+        logging.basicConfig(
+            filename=f'log/{dt_string}_scraper.log',
+            level=logging.WARNING,
+            format='%(asctime)s - %(levelname)s - %(message)s'
+        )
+    except FileNotFoundError:
+        os.makedirs('log')
+        logging.basicConfig(
+            filename=f'log/{dt_string}_scraper.log',
+            level=logging.WARNING,
+            format='%(asctime)s - %(levelname)s - %(message)s'
+        )
 
     logging.warning('Scrapeo iniciado.')
 
-    # Read URLs to scrape
-    with open('output/carrefour-productos.csv', 'r', encoding='utf-8') as csvfile:
-        urls_to_scrape = [row['url'] for row in csv.DictReader(csvfile)]
+    # Leer URLs del archivo CSV y quitar el prefijo si está presente
+    with open('output/carrefour-categories.csv', 'r', encoding='utf-8') as csvfile:
+        urls_to_scrape = [
+            row['url'].replace('https://www.carrefour.es', '') for row in csv.DictReader(csvfile)
+        ]
+    
+    if not urls_to_scrape:
+        logging.warning("No se encontraron URLs para scrapear.")
+        print("No se encontraron URLs para scrapear.")
+        return
 
-    # Limit the number of concurrent tasks
-    max_concurrent_tasks = 10  # Adjust this number based on your system capabilities
-    sem = asyncio.Semaphore(max_concurrent_tasks)
-
-    # Open the output file
-    fieldnames = ['url', 'nombre', 'precio', 'precio_descuento', 'precio_por', 'precio_por_descuento',
-                  'categoria', 'subcategoria', 'subsubcategoria', 'imagen']
-    with open('output/carrefour-product-details.csv', 'w', newline='', encoding='utf-8') as csvfile:
+    fieldnames = ['id', 'url', 'nombre', 'precio', 'precio_por', 'marca', 'categoria', 'imagen']
+    with open(csv_output, 'w', newline='', encoding='utf-8') as csvfile:
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
         writer.writeheader()
 
-        async with async_playwright() as playwright:
-            # Launch the browser once
-            browser = await playwright.chromium.launch(headless=True)
-
-            # Start the cleanup thread
-            cleanup_thread = threading.Thread(target=kill_node_exe_processes_older_than, args=(2,), daemon=True)
-            cleanup_thread.start()
-
-            tasks = []
-            for url in urls_to_scrape:
-                tasks.append(scrape_product_details(sem, url, browser))
-
-            # Process results as they become available
-            for future in asyncio.as_completed(tasks):
-                result = await future
-                if result:
-                    writer.writerow(result)
-
-            # Close the browser after all tasks are done
-            await browser.close()
+        for url in urls_to_scrape:
+            print(f"Scrapeando URL: {url}")
+            scrape_product_details(url, writer)
 
     logging.warning('Scrapeo terminado.')
     print('Scrapeo terminado.')
 
+    clean_duplicates(csv_output)
+
+def clean_duplicates(csv):
+    df = pd.read_csv(csv)
+    print(f"Limpiando duplicados en {csv}, numero de elementos duplicados: {df.duplicated().sum()}")
+    logging.warning(f"Limpiando duplicados en {csv}, numero de elementos duplicados: {df.duplicated().sum()}")
+    df.drop_duplicates(subset='id', inplace=True)
+    df.to_csv(csv, index=False)
+
+def scrape_product_details(url, writer):
+    offset = 0
+    while True:
+        full_url = f"{base_url}{url}?offset={offset}"
+        print(f"Accediendo a: {full_url}")
+        
+        response = requests.get(full_url, impersonate="chrome")
+        if response.status_code == 206:
+            print("No se encontraron más productos en esta página.")
+            break  # Salir si ya no hay más productos (código 206)
+
+        elif response.status_code != 200:
+            logging.warning(f"Error al acceder a {full_url}: {response.status_code}")
+            print(f"Error al acceder a {full_url}: {response.status_code}")
+            break
+
+        try:
+            data = response.json()
+        except ValueError:
+            logging.warning(f"Error al decodificar JSON de la respuesta en {full_url}")
+            print(f"Error al decodificar JSON de la respuesta en {full_url}")
+            break  # Salir si la respuesta no es un JSON válido
+
+        items = data.get('results', {}).get('items', [])
+        category = data.get('category', {}).get('display_name', '')
+
+        for item in items:
+            name = item.get('name', '')
+            marca = item.get('brand', {}).get('name', '')
+            # Checkea si es marca blanca
+            if 'Carrefour' in name:
+                marca = 'Carrefour'
+
+            # Procesar el precio para convertirlo en float
+            precio_str = item.get('price', '').replace('€', '').replace(',', '.').strip()
+            try:
+                precio = float(precio_str) if precio_str else None
+            except ValueError:
+                precio = None  # En caso de fallo de conversión
+
+            # Procesar el precio_por
+            precio_por_str = item.get('price_per_unit', '').replace(',', '.').strip()
+            precio_por = f"{precio_por_str}/{item.get('measure_unit', '')}" if precio_por_str else None
+
+            product_data = {
+                'id': item.get('product_id', ''),
+                'url': 'https://www.carrefour.es' + item.get('url', ''),
+                'nombre': name,
+                'precio': precio,
+                'precio_por': precio_por,
+                'marca': marca,
+                'categoria': category,
+                'imagen': item.get('images', {}).get('desktop', '')
+            }
+            writer.writerow(product_data)
+
+        # Incrementar offset y pausar para evitar sobrecarga
+        offset += 24
+        time.sleep(0.2)
+
 if __name__ == "__main__":
-    # Invoca para obtener las urls de productos actualizadas
-    xml_c.actualizar_csv_productos()
-    asyncio.run(main())
+    # xml_c.guardarCSV()
+    # main()
+    clean_duplicates(csv_output)

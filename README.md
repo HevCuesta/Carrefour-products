@@ -1,11 +1,10 @@
 # Carrefour scraper
-Scraper para carrefour españa con Playwright, absurdamente lento.
+API product scraper para Carrefour España, uso de curl_cffi para evitar bloqueo
 
 ## Uso:
 
-Playwright tiene instalación especial:
+Instala dependencias:
 ```
-pip install playwright
-playwright install
+pip install -r requirements.txt
 ```
 Luego simplemente ejecutar el ```main.py``` 
